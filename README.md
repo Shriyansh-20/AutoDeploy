@@ -9,3 +9,4 @@ It has a very simple interface, currently stripped off of all the fanciful decor
 ## Screenshots
 <img width="869" alt="Screenshot 2024-09-28 at 6 23 13 PM" src="https://github.com/user-attachments/assets/71bb3a05-ed06-4dc2-86bd-bc1e9cae1598">
 <img width="1023" alt="Screenshot 2024-09-28 at 6 39 33 PM" src="https://github.com/user-attachments/assets/b63416b9-93be-4daf-952f-a93fc57ad5e8">
+<img width="1437" alt="Screenshot 2024-09-28 at 6 40 28 PM" src="https://github.com/user-attachments/assets/f2a2023c-c924-4a64-923f-cab81c9aab69">
