@@ -7,4 +7,4 @@ It allows the user to simply feed the link to their github repo, click "Upload" 
 It has a very simple interface, currently stripped off of all the fanciful decorations.
 
 ## Screenshots
-<img width="1440" alt="Screenshot 2024-09-28 at 6 18 43 PM" src="https://github.com/user-attachments/assets/ff79745c-acee-4f7d-b5ce-206032516757">
+<img width="869" alt="Screenshot 2024-09-28 at 6 23 13 PM" src="https://github.com/user-attachments/assets/71bb3a05-ed06-4dc2-86bd-bc1e9cae1598">
