@@ -2,10 +2,13 @@
 import { createClient, commandOptions } from "redis";
 import { copyFinalDist, downloadS3Folder } from "./aws";
 import { buildProject } from "./utils";
-const subscriber = createClient();
+
+const redisURL = 'redis://red-csdpvchu0jms73a7p5d0:6379';
+
+const subscriber = createClient({ url: redisURL });
 subscriber.connect();
 
-const publisher = createClient();
+const publisher = createClient({ url: redisURL });
 publisher.connect();
 
 async function main() {
