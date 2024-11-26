@@ -1,0 +1,31 @@
+# Ignore node_modules (will be rebuilt inside the container)
+node_modules
+
+# Ignore logs
+*.log
+
+# Ignore temporary files and cache
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.DS_Store
+.cache
+
+# Ignore build artifacts
+dist/
+output/
+
+# Ignore environment variables
+.env
+.env.*
+
+# Ignore version control
+.git
+.gitignore
+
+# Ignore Docker-related files not needed in the image
+docker-compose.yml
+
+# Ignore IDE settings
+.vscode
+.idea
