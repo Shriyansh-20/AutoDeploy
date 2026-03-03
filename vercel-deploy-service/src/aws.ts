@@ -1,5 +1,5 @@
 import { S3 } from "aws-sdk";
-import fs from "fs";
+import fs, { existsSync } from "fs";
 import path from "path";
 
 const s3 = new S3({
@@ -43,6 +43,12 @@ export async function downloadS3Folder(prefix: string) {
 
 export function copyFinalDist(id: string) {
     const folderPath = path.join(__dirname, `output/${id}/dist`);
+    
+    // if (!existsSync(folderPath)) {
+    //     console.error(`dist folder not found at ${folderPath}`);
+    //     throw new Error(`Build failed - dist folder not found`);
+    // }
+
     const allFiles = getAllFiles(folderPath);
     allFiles.forEach(file => {
         uploadFile(`dist/${id}/` + file.slice(folderPath.length + 1), file);
