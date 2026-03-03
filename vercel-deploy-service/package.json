@@ -1,7 +1,6 @@
 {
   "name": "vercel-deploy-service",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -17,6 +16,9 @@
     "aws-sdk": "^2.1693.0",
     "fs": "^0.0.1-security",
     "path": "^0.12.7",
-    "redis": "^4.7.1"
-  }
+    "redis": "^4.7.1",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {},
+  "description": ""
 }

@@ -4,6 +4,8 @@ import { copyFinalDist, downloadS3Folder } from "./aws";
 import { buildProject } from "./utils";
 
 const redisURL = 'redis://red-csdpvchu0jms73a7p5d0:6379';
+// use this whne trying from local 
+const redisLocalLink = 'redis://localhost:6379'
 
 const subscriber = createClient({ url: redisURL });
 subscriber.connect();
