@@ -16,52 +16,135 @@ AutoDeploy is a distributed system that automates the entire deployment pipeline
 
 ## Architecture
 
+AutoDeploy implements a **three-tier distributed microservices architecture** where each service is independent, stateless, and communicates asynchronously through message queues.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Frontend (React)                         │
 │                    (Port 5173 - Vite Dev)                       │
 └────────────────────────────┬────────────────────────────────────┘
-                             │ API Calls
+                             │ HTTP REST API
                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Upload Service (Express)                           │
-│                     (Port 3000)                                 │
-│  • Receive GitHub URLs                                          │
-│  • Clone repositories                                           │
-│  • Upload artifacts to S3                                       │
-│  • Enqueue build jobs to Redis                                  │
-│  • Update status in Redis Hash                                  │
-└────────────┬────────────────────────────────────┬───────────────┘
-             │                                    │
-             ▼                                    ▼
-         ┌──────────────┐              ┌──────────────────┐
-         │ Cloudflare   │              │ Redis Pub/Sub    │
-         │   R2 (S3)    │              │  - build-queue   │
-         │              │              │  - status hashes │
-         └──────────────┘              └──────────────────┘
-                                             │
-                                             ▼
-                                    ┌────────────────────┐
-                                    │ Deploy Service     │
-                                    │ (Worker)           │
-                                    │                    │
-                                    │ • Pop build queue  │
-                                    │ • Download S3      │
-                                    │ • Build project    │
-                                    │ • Upload dist      │
-                                    │ • Update status    │
-                                    └────────────────────┘
-                                             │
-                                             ▼
-                                    ┌────────────────────┐
-                                    │ Request Handler    │
-                                    │ (Port 3001)        │
-                                    │                    │
-                                    │ Reverse Proxy      │
-                                    │ Subdomain Router   │
-                                    │ S3 Content Serve   │
-                                    └────────────────────┘
+    ╔════════════════════════════════════════════════════════════════╗
+    ║   ARCHITECTURE 1: REQUEST INGEST SERVICE (Upload Service)     ║
+    ║                     Port 3000 (Express)                        ║
+    ║                                                                ║
+    ║  • Accept GitHub repository URLs from frontend                ║
+    ║  • Clone repositories to local storage                        ║
+    ║  • Upload source code to S3/R2                                ║
+    ║  • Push job IDs to Redis queue (async message)                ║
+    ║  • Return deployment ID for client tracking                   ║
+    ╚════════════════════════╬═════════════════════════════════════╝
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+                    ▼                 ▼
+            ┌──────────────┐  ┌──────────────────┐
+            │ Cloudflare   │  │ Redis Queue      │
+            │   R2 (S3)    │  │                  │
+            │              │  │ Channel: build-  │
+            │ Stores:      │  │ queue (FIFO)     │
+            │ - source/*   │  │                  │
+            │ - dist/*     │  │ Pub/Sub: status  │
+            └──────────────┘  │ hash             │
+                              └────────┬─────────┘
+                                       │ Message: Job ID
+                                       ▼
+    ╔════════════════════════════════════════════════════════════════╗
+    ║ ARCHITECTURE 2: BUILD ORCHESTRATION SERVICE (Deploy Service)  ║
+    ║                   Worker Process (Async)                       ║
+    ║                                                                ║
+    ║  • Listen to Redis queue (blocking pop)                       ║
+    ║  • Download source code from S3                               ║
+    ║  • Execute npm build (project-specific)                       ║
+    ║  • Compress & upload distribution to S3                       ║
+    ║  • Update Redis status hash (async completion)                ║
+    ║  • Loop back to queue for next job                            ║
+    ║  • Scales horizontally (multiple instances)                   ║
+    ╚════════════════════════╬═════════════════════════════════════╝
+                             │ Status Update
+                             ▼
+    ╔════════════════════════════════════════════════════════════════╗
+    ║ ARCHITECTURE 3: RUNTIME REQUEST ROUTER (Request Handler)      ║
+    ║                   Port 3001 (Express)                          ║
+    ║                                                                ║
+    ║  • Reverse proxy for deployed applications                    ║
+    ║  • Extract deployment ID from subdomain                       ║
+    ║  • Route requests to S3 distribution files                    ║
+    ║  • Serve assets with correct MIME types                       ║
+    ║  • Zero-downtime serving of multiple deployments              ║
+    ║  • Stateless & infinitely scalable                            ║
+    ╚════════════════════════════════════════════════════════════════╝
 ```
+
+## Distributed System Architecture Patterns
+
+AutoDeploy demonstrates production-grade distributed system design:
+
+### **Pattern 1: Three-Tier Service Architecture**
+
+| Service | Responsibility | Scalability | State |
+|---------|---|---|---|
+| **Upload Service** | Intake & Validation | Scale horizontally (stateless HTTP) | Ephemeral (clones deleted) |
+| **Deploy Service** | Computation & Build | Scale horizontally (queue-based workers) | None (idempotent operations) |
+| **Request Handler** | Routing & Serving | Scale infinitely (stateless proxy) | None (reads from S3) |
+
+### **Pattern 2: Asynchronous Message-Driven Design**
+
+```
+Upload Service (Producer)  ──LPUSH──>  [build-queue]  ──BRPOP──>  Deploy Service (Consumer)
+                                            ▲                              │
+                                            │ HSET/HGET                    │
+                                            └──────  [status hash]  ◄──────┘
+                                                        ▲
+                                                        │ HGET
+                                                        │
+Frontend Client (Polling)  ───GET /status?id=X ────────┘
+```
+
+**Benefits:**
+- Decouples request handling from compute
+- Enables independent service failures without cascading
+- Upload Service returns immediately (fast user experience)
+- Jobs queue up if Deploy Service is slow
+- Can pause/resume builds by stopping Deploy Service
+
+### **Pattern 3: Stateless & Horizontally Scalable Services**
+
+```
+Load Balancer
+      │
+      ├─→ Upload Service Instance 1 ┐
+      ├─→ Upload Service Instance 2 ├─→ Shared Redis Queue
+      ├─→ Upload Service Instance 3 ┘
+      
+Load Balancer
+      │
+      ├─→ Deploy Service Worker 1 ┐
+      ├─→ Deploy Service Worker 2 ├─→ Shared Redis & S3
+      ├─→ Deploy Service Worker 3 ┘
+      
+Load Balancer
+      │
+      ├─→ Request Handler Instance 1 ┐
+      ├─→ Request Handler Instance 2 ├─→ Shared S3
+      ├─→ Request Handler Instance 3 ┘
+```
+
+No sticky sessions, session affinity, or state replication needed.
+
+### **Pattern 4: Distributed Data Consistency**
+
+Two sources of truth:
+- **Redis**: Fast, in-memory, eventual consistency (deployment status)
+- **S3/R2**: Durable storage, single source of truth (application code & builds)
+
+Workflow ensures consistency:
+1. Upload Service uploads source to S3 (durable)
+2. Upload Service updates Redis status (fast)
+3. Deploy Service verifies S3 before building (safe)
+4. Deploy Service uploads dist to S3 (durable)
+5. Deploy Service updates Redis status (fast)
 
 ## System Components
 
@@ -164,6 +247,142 @@ Reverse proxy service that routes user requests to deployed applications.
 | **Storage** | Cloudflare R2 (S3-compatible) | Artifact storage |
 | **Git** | simple-git | Repository cloning |
 | **Build** | npm/Node.js | Project compilation |
+
+## Distributed System Resilience & Scalability
+
+### Service Failure Isolation
+
+The three-tier architecture ensures failures don't cascade:
+
+**If Upload Service fails:**
+```
+User cannot submit new deployments
+✓ Existing builds continue unaffected
+✓ Request Handler keeps serving live apps
+✓ Deploy Service processes queued jobs
+```
+
+**If Deploy Service fails:**
+```
+✓ Upload Service still accepts deployments
+✓ Jobs queue in Redis (FIFO preservation)
+⚠ Builds delayed until service restarts
+✓ Request Handler serves previously built apps
+```
+
+**If Request Handler fails:**
+```
+✓ Upload Service still accepts deployments
+✓ Deploy Service still processes builds
+✗ Users cannot access deployed applications
+→ Mitigation: Deploy multiple instances behind load balancer
+```
+
+### Horizontal Scaling Strategy
+
+Deploy multiple instances of each service for high availability:
+
+**Upload Service Scaling:**
+```bash
+# Start 3 instances behind load balancer
+pm2 start upload_service.js -i 3
+
+# Each instance handles concurrent requests
+# Requests distributed by load balancer
+# All share same Redis and S3 backend
+```
+
+**Deploy Service Scaling:**
+```bash
+# Start 5 worker instances
+for i in {1..5}; do
+  node deploy_service.js &
+done
+
+# All workers consume from same Redis queue
+# One worker processes per job (automatic)
+# No coordination needed
+# Add more workers to increase throughput
+```
+
+**Request Handler Scaling:**
+```bash
+# Deploy behind CDN or load balancer
+# Each instance independently serves from S3
+# No state synchronization required
+# Add instances as traffic grows
+```
+
+### Data Durability & Consistency
+
+**Redis (Volatile):**
+- Status hashes: Lost on server restart
+- Build queue: Lost on server restart
+- Mitigation: Enable AOF (Append-Only File) persistence
+
+**S3/R2 (Durable):**
+- Source code: Permanent until explicitly deleted
+- Build artifacts: Permanent until TTL expires
+- Single source of truth for all application data
+
+**Consistency Guarantees:**
+- Source code immediately written to S3 before returning ID (fail-safe)
+- Build status updated in Redis AFTER S3 upload completes (atomic)
+- Request Handler reads final artifact from S3 (immutable)
+
+### Monitoring & Observability
+
+Key metrics for distributed system health:
+
+```
+Upload Service:
+  - Request rate (POST /deploy, GET /status)
+  - Clone + upload latency
+  - Queue depth (jobs waiting)
+  - S3 operation errors
+
+Deploy Service:
+  - Queue consumption rate
+  - Build success/failure rate
+  - Build duration (p50, p95, p99)
+  - Memory usage during builds
+  - Worker thread utilization
+
+Request Handler:
+  - Request throughput
+  - Response latency
+  - S3 cache hit rate
+  - 404 errors (missing deployments)
+```
+
+### Network Partition Resilience
+
+**Scenario: Redis unavailable**
+```
+Upload Service: ✗ Cannot queue jobs
+Deploy Service: ✗ Cannot poll queue
+Request Handler: ✓ Continues serving (stateless)
+
+Recovery: Replicas can serve as fallback
+```
+
+**Scenario: S3 unavailable**
+```
+Upload Service: ✗ Cannot upload source
+Deploy Service: ✗ Cannot download source or upload artifacts
+Request Handler: ✗ Cannot serve applications
+
+Mitigation: Use S3 replication across regions
+```
+
+**Scenario: Network latency spike**
+```
+Upload Service: Tolerates (S3 upload is async to user)
+Deploy Service: Tolerates (blocking Redis pop waits)
+Request Handler: Impacted (user-facing latency)
+
+Mitigation: Enable S3 caching, implement request timeouts
+```
 
 ## Installation & Setup
 
@@ -400,6 +619,204 @@ vercel (bucket)
         │   ├── main.*.js
         │   └── style.*.css
         └── ... (all built files)
+```
+
+## Understanding the Distributed Implementation
+
+### Key Code Patterns for Distributed Systems
+
+#### 1. Async Message Passing (Upload Service → Deploy Service)
+
+**Upload Service** (Producer):
+```typescript
+// src/index.ts - Line 35-40
+publisher.lPush("build-queue", id);        // Enqueue job (non-blocking)
+publisher.hSet("status", id, "uploaded");  // Update status
+
+res.json({ id: id })  // Return immediately to user
+// Heavy work continues in background
+```
+
+This pattern is crucial: Return to user quickly while queuing async work. Prevents timeout on frontend.
+
+**Deploy Service** (Consumer):
+```typescript
+// src/index.ts - Line 15-28
+const res = await subscriber.brPop(
+    commandOptions({ isolated: true }),
+    'build-queue',
+    0
+);
+
+const id = res.element;
+// Download, build, upload happens here
+```
+
+Uses blocking Redis pop (`brPop`): Worker waits for messages instead of polling, saving CPU.
+
+#### 2. Stateless Service Design (All Services)
+
+**Request Handler Example**:
+```typescript
+// src/index.ts - Line 8-28
+const app = express();
+
+app.get("/*", async (req, res) => {
+    const host = req.hostname;
+    const id = host.split(".")[0];
+    const filePath = req.path;
+    
+    // No session storage, no local state
+    // All info extracted from request
+    // Compute response from S3
+})
+```
+
+Key: No persistent local state. Enables stateless scaling.
+
+#### 3. Distributed Data Consistency (Redis + S3)
+
+**Write Ordering in Upload Service**:
+```typescript
+// IMPORTANT: Order matters!
+1. await uploadFile(...)           // S3 (durable, slow)
+2. publisher.lPush(...)            // Redis queue (fast)
+3. publisher.hSet(...)             // Redis hash (fast)
+4. res.json({ id })                // Return to user
+```
+
+Files are durable BEFORE queue is updated → No orphaned jobs pointing to missing files.
+
+**Read Verification in Deploy Service**:
+```typescript
+await downloadS3Folder(`output/${id}`)  // Verify files exist first
+await buildProject(id);                 // Then process
+```
+
+Always verify source of truth before acting.
+
+#### 4. Failure Isolation (Error Handling)
+
+**Upload Service** error in one request doesn't affect others:
+```typescript
+app.post("/deploy", async (req, res) => {
+    try {
+        // Each request isolated
+        const id = generate();
+        // ... if this request fails ...
+    } catch (err) {
+        // Only this request fails
+        // Other requests continue
+    }
+})
+```
+
+**Deploy Service** failure doesn't affect queue:
+```typescript
+while(1) {
+    try {
+        const res = await subscriber.brPop('build-queue', 0);
+        // Process job
+    } catch (err) {
+        // Job remains in queue for retry
+        // Service restarts and processes next job
+    }
+}
+```
+
+#### 5. Service Communication Over Shared Infrastructure
+
+```
+Three services never call each other directly.
+Instead, they communicate through Redis & S3:
+
+Upload Service:
+  ├─ Writes to S3 ─────┐
+  └─ Writes to Redis ──├─ Upload Service returns to user
+                       │
+Deploy Service:        │
+  ├─ Reads from Redis <┤ Polls for new jobs
+  ├─ Reads from S3 <───┤ Gets source code
+  └─ Writes to S3 ─────┤ Stores built artifacts
+                       │
+Request Handler:       │
+  └─ Reads from S3 <───┘ Serves applications
+
+Result: Services are completely decoupled.
+```
+
+### Debugging the Distributed System
+
+**Check Redis Queue Status**:
+```bash
+redis-cli
+> LLEN build-queue           # Jobs waiting
+> HGETALL status             # All deployment statuses
+> LRANGE build-queue 0 -1    # See queue contents
+```
+
+**Monitor Service Communication**:
+```bash
+# Terminal 1: Watch queue growth
+watch -n 1 "redis-cli LLEN build-queue"
+
+# Terminal 2: Add deployment
+curl -X POST http://localhost:3000/deploy -d '{"repoUrl":"..."}'
+
+# Terminal 3: Watch Deploy Service processing
+# You should see LLEN decrease
+```
+
+**Trace a Deployment**:
+```bash
+# 1. Submit deployment, get ID
+DEPLOYMENT_ID="abc123"
+
+# 2. Check status in Redis
+redis-cli HGET status $DEPLOYMENT_ID
+
+# 3. Check if files exist in S3
+aws s3 ls s3://vercel/output/$DEPLOYMENT_ID/
+aws s3 ls s3://vercel/dist/$DEPLOYMENT_ID/
+
+# 4. Check Request Handler can access
+curl -H "Host: ${DEPLOYMENT_ID}.100xdevs.com" http://localhost:3001/
+```
+
+### Testing Failure Scenarios
+
+**Test Queue Resilience:**
+```bash
+# 1. Start all services normally
+# 2. Kill Deploy Service: pkill -f "deploy_service.js"
+# 3. Submit new deployment
+# 4. Verify job queued in Redis (not lost)
+redis-cli LLEN build-queue  # Should show 1
+# 5. Restart Deploy Service
+# 6. Job processes normally (recovery!)
+```
+
+**Test Upload Service Failure:**
+```bash
+# 1. Both Deploy Service and Request Handler running
+# 2. Kill Upload Service: pkill -f "upload_service.js"
+# 3. Deploy Service keeps processing queue
+# 4. Request Handler keeps serving (no interruption to users!)
+# 5. Restart Upload Service
+# 6. User can submit new deployments again
+```
+
+**Test S3 Latency:**
+```bash
+# Simulate slow S3 by adding network delay
+sudo tc qdisc add dev lo root netem delay 5000ms
+
+# Now uploads/downloads have 5 second latency
+# Observe: Upload Service still returns quickly (S3 is fire-and-forget via queue)
+# Observe: Deploy Service handles increased latency gracefully
+
+# Remove delay
+sudo tc qdisc del dev lo root
 ```
 
 ## Error Handling
