@@ -446,18 +446,6 @@ vercel (bucket)
 - Enable S3 bucket versioning and lifecycle policies
 - Implement request signing for R2 API calls
 
-## Future Enhancements
-
-- [ ] Support multiple build frameworks (Next.js, Vue, Svelte, etc.)
-- [ ] Real-time deployment logs via WebSockets
-- [ ] Rollback to previous deployments
-- [ ] Custom domain routing
-- [ ] Build caching and incremental builds
-- [ ] Horizontal scaling of Deploy Service instances
-- [ ] Database integration for persistent deployment records
-- [ ] GitHub webhook integration for auto-deployments
-- [ ] Environment variable management UI
-- [ ] Performance analytics and monitoring
 
 ## Screenshots
 
